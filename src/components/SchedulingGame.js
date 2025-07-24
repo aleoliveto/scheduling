@@ -27,7 +27,6 @@ const SchedulingGame = () => {
   const [timeLeft, setTimeLeft] = useState(20 * 60); // 20 minutes
   const [showConstraints, setShowConstraints] = useState(true);
 
-  // This handles route drop with timing and overlap checks
   const handleRouteDrop = (aircraftId, route, dropTime = null) => {
     if (disruptionState.frozenAircraft.includes(aircraftId)) {
       alert(`🧯 Aircraft ${aircraftId} is under tech inspection. Cannot assign routes.`);
@@ -40,11 +39,14 @@ const SchedulingGame = () => {
     const [h, m] = route.block.split(':');
     const blockMins = parseInt(h) * 60 + parseInt(m);
 
-    // Use dropTime or default start time
     let startTime = dropTime !== null ? dropTime : 360; // default 06:00
-    if (dropTime === null && existingRoutes.length > 0) {
+    if (dropTime === null && existingRoutes.length > 0 && !route.start) {
       const lastRoute = existingRoutes[existingRoutes.length - 1];
       startTime = lastRoute.end + turnaround;
+    }
+    // If updating existing route with edited start time, use route.start
+    if (route.start !== undefined && route.start !== null) {
+      startTime = route.start;
     }
 
     // Add delay if applicable
@@ -57,42 +59,31 @@ const SchedulingGame = () => {
 
     const endTime = startTime + blockMins;
 
-    // Overlap check at drop position
+    // Check overlaps excluding self if updating
     const overlaps = existingRoutes.some(
-      (r) => !(r.end <= startTime || r.start >= endTime)
+      (r) =>
+        r.id !== route.id && !(r.end <= startTime || r.start >= endTime)
     );
 
-    if (overlaps && dropTime !== null) {
-      // Fallback to after last flight + turnaround
-      if (existingRoutes.length > 0) {
-        const lastRoute = existingRoutes[existingRoutes.length - 1];
-        startTime = lastRoute.end + turnaround;
-        const fallbackEnd = startTime + blockMins;
-
-        const fallbackOverlaps = existingRoutes.some(
-          (r) => !(r.end <= startTime || r.start >= fallbackEnd)
-        );
-
-        if (fallbackOverlaps) {
-          alert('❌ Cannot place flight due to overlap.');
-          return;
-        }
-      } else {
-        alert('❌ Cannot place flight due to overlap.');
-        return;
-      }
+    if (overlaps) {
+      alert('❌ Cannot place flight due to overlap.');
+      return;
     }
 
     const newRoute = {
       ...route,
       start: startTime,
       end: endTime,
-      id: Date.now() + Math.random(),
+      id: route.id || (Date.now() + Math.random()),
     };
+
+    // Update or add route
+    const updatedRoutes = existingRoutes.filter((r) => r.id !== newRoute.id);
+    updatedRoutes.push(newRoute);
 
     setRoutesByAircraft((prev) => ({
       ...prev,
-      [aircraftId]: [...existingRoutes, newRoute],
+      [aircraftId]: updatedRoutes,
     }));
   };
 
@@ -116,7 +107,6 @@ const SchedulingGame = () => {
   }, []);
 
   useEffect(() => {
-    // Simple disruption event example - can expand later
     const disruptions = [
       {
         message: '⛑ Crew illness on Aircraft A2 — please remove 1 sector!',
@@ -154,7 +144,9 @@ const SchedulingGame = () => {
           setTimeout(() => {
             setDisruptionState((prev) => ({
               ...prev,
-              frozenAircraft: prev.frozenAircraft.filter((id) => id !== random.affectedAircraft),
+              frozenAircraft: prev.frozenAircraft.filter(
+                (id) => id !== random.affectedAircraft
+              ),
             }));
           }, 2 * 60 * 1000);
         }
