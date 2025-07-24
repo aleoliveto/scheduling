@@ -8,6 +8,8 @@ import ConstraintsPanel from './ConstraintsPanel';
 import Scoreboard from './Scoreboard';
 import EventModal from './EventModal';
 
+const baseTime = 360; // 06:00
+
 const SchedulingGame = () => {
   const aircraftList = ['A1', 'A2', 'A3'];
 
@@ -27,29 +29,40 @@ const SchedulingGame = () => {
   const [timeLeft, setTimeLeft] = useState(20 * 60); // 20 minutes
   const [showConstraints, setShowConstraints] = useState(true);
 
+  // Utility: get aircraft type from id
+  const getAircraftType = (aircraftId) =>
+    aircraftId === 'A1' ? 'A320' : 'A321';
+
+  // MAIN HANDLE DROP
   const handleRouteDrop = (aircraftId, route, dropTime = null) => {
     if (disruptionState.frozenAircraft.includes(aircraftId)) {
       alert(`🧯 Aircraft ${aircraftId} is under tech inspection. Cannot assign routes.`);
       return;
     }
 
+    const aircraftType = getAircraftType(aircraftId);
     const existingRoutes = routesByAircraft[aircraftId] || [];
-    const turnaround = route.turnTimes?.[route.aircraftType || 'A320'] ?? 35;
 
+    // Get turnaround for this type
+    const turnaround =
+      route.turnTimes?.[aircraftType] ??
+      (aircraftId === 'A1' ? 35 : aircraftId === 'A2' ? 40 : 50);
+
+    // Parse duration
     const [h, m] = route.block.split(':');
     const blockMins = parseInt(h) * 60 + parseInt(m);
 
-    let startTime = dropTime !== null ? dropTime : 360; // default 06:00
+    // Start logic
+    let startTime = dropTime !== null ? dropTime : baseTime;
     if (dropTime === null && existingRoutes.length > 0 && !route.start) {
       const lastRoute = existingRoutes[existingRoutes.length - 1];
       startTime = lastRoute.end + turnaround;
     }
-    // If updating existing route with edited start time, use route.start
     if (route.start !== undefined && route.start !== null) {
       startTime = route.start;
     }
 
-    // Add delay if applicable
+    // Apply disruption delay
     if (
       disruptionState.delayedAirport &&
       (route.from === disruptionState.delayedAirport || route.to === disruptionState.delayedAirport)
@@ -59,39 +72,120 @@ const SchedulingGame = () => {
 
     const endTime = startTime + blockMins;
 
-    // Check overlaps excluding self if updating
-    const overlaps = existingRoutes.some(
-      (r) =>
-        r.id !== route.id && !(r.end <= startTime || r.start >= endTime)
-    );
+    // Prepare return
+    const returnLeg = {
+      from: route.to,
+      to: route.from,
+      block: route.block,
+      turnTimes: route.turnTimes,
+    };
+    const inboundStart = endTime + turnaround;
+    const inboundEnd = inboundStart + blockMins;
 
+    // Create tripId
+    const tripId = Date.now() + Math.random();
+
+    // Overlap: Check only vs. other trips
+    const proposedSegments = [
+      { start: startTime, end: endTime },
+      { start: endTime, end: endTime + turnaround },
+      { start: inboundStart, end: inboundEnd }
+    ];
+    const overlaps = existingRoutes.some(r =>
+      proposedSegments.some(seg =>
+        r.tripId !== tripId &&
+        !(r.end <= seg.start || r.start >= seg.end)
+      )
+    );
     if (overlaps) {
       alert('❌ Cannot place flight due to overlap.');
       return;
     }
 
-    const newRoute = {
+    // OUTBOUND
+    const outbound = {
       ...route,
       start: startTime,
       end: endTime,
-      id: route.id || (Date.now() + Math.random()),
+      id: tripId + '-out',
+      tripId,
+      aircraftType,
+      isTurnaround: false,
+    };
+    // TURNAROUND BAR
+    const turnaroundBar = {
+      start: endTime,
+      end: endTime + turnaround,
+      id: tripId + '-turn',
+      tripId,
+      aircraftType,
+      isTurnaround: true,
+      turnaround,
+    };
+    // INBOUND
+    const inbound = {
+      ...returnLeg,
+      start: endTime + turnaround,
+      end: inboundEnd,
+      id: tripId + '-in',
+      tripId,
+      aircraftType,
+      isTurnaround: false,
     };
 
-    // Update or add route
-    const updatedRoutes = existingRoutes.filter((r) => r.id !== newRoute.id);
-    updatedRoutes.push(newRoute);
+    // Add all
+    const updated = [...existingRoutes, outbound, turnaroundBar, inbound];
+    updated.sort((a, b) => a.start - b.start);
 
     setRoutesByAircraft((prev) => ({
       ...prev,
-      [aircraftId]: updatedRoutes,
+      [aircraftId]: updated,
     }));
   };
 
+  // REMOVE: Remove whole trip by tripId
   const handleRouteDelete = (aircraftId, routeId) => {
-    setRoutesByAircraft((prev) => ({
-      ...prev,
-      [aircraftId]: prev[aircraftId].filter((r) => r.id !== routeId),
-    }));
+    setRoutesByAircraft((prev) => {
+      const allRoutes = prev[aircraftId];
+      const tripId = allRoutes.find(r => r.id === routeId)?.tripId;
+      if (!tripId) return prev;
+      return {
+        ...prev,
+        [aircraftId]: allRoutes.filter(r => r.tripId !== tripId),
+      };
+    });
+  };
+
+  // UPDATE: Move all trip segments if the outbound start changes
+  const handleUpdateTripStart = (aircraftId, tripId, newStart) => {
+    setRoutesByAircraft((prev) => {
+      const routes = prev[aircraftId];
+      const tripSegments = routes.filter(r => r.tripId === tripId);
+      if (tripSegments.length !== 3) return prev;
+
+      const [outbound, turnaround, inbound] = [
+        tripSegments.find(r => r.id.endsWith('-out')),
+        tripSegments.find(r => r.id.endsWith('-turn')),
+        tripSegments.find(r => r.id.endsWith('-in')),
+      ];
+      if (!outbound || !turnaround || !inbound) return prev;
+
+      const duration = outbound.end - outbound.start;
+      const turn = turnaround.end - turnaround.start;
+      const inboundDuration = inbound.end - inbound.start;
+
+      const newOutbound = { ...outbound, start: newStart, end: newStart + duration };
+      const newTurnaround = { ...turnaround, start: newOutbound.end, end: newOutbound.end + turn };
+      const newInbound = { ...inbound, start: newTurnaround.end, end: newTurnaround.end + inboundDuration };
+
+      // Replace in array
+      const updatedRoutes = routes
+        .filter(r => r.tripId !== tripId)
+        .concat([newOutbound, newTurnaround, newInbound])
+        .sort((a, b) => a.start - b.start);
+
+      return { ...prev, [aircraftId]: updatedRoutes };
+    });
   };
 
   const allAircraft = aircraftList.map((id) => ({
@@ -204,6 +298,7 @@ const SchedulingGame = () => {
               routesByAircraft={routesByAircraft}
               onRouteDrop={handleRouteDrop}
               onRouteDelete={handleRouteDelete}
+              onUpdateTripStart={handleUpdateTripStart}
             />
           </div>
 
