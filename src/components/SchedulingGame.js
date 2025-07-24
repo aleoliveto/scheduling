@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+// src/components/SchedulingGame.js
+import React, { useState, useEffect, useRef } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
+import { TouchBackend } from 'react-dnd-touch-backend';
 
 import GanttSchedule from './GanttSchedule';
 import RouteLibrary from './RouteLibrary';
@@ -8,292 +10,208 @@ import ConstraintsPanel from './ConstraintsPanel';
 import Scoreboard from './Scoreboard';
 import EventModal from './EventModal';
 
-const baseTime = 360; // 06:00
+import './App.scss'; // Ensure this matches your file structure
+
+const baseTime = 360;
+const latestAllowed = 1380;
+const maxDutyTime = 720;
 
 const SchedulingGame = () => {
-  const aircraftList = ['A1', 'A2', 'A3'];
+  const isTouch = typeof window !== 'undefined' && 'ontouchstart' in window;
 
-  const [routesByAircraft, setRoutesByAircraft] = useState({
-    A1: [],
-    A2: [],
-    A3: [],
-  });
+  const [routesByAircraft, setRoutesByAircraft] = useState({ A1: [], A2: [], A3: [] });
+  const routesRef = useRef(routesByAircraft);
+  useEffect(() => { routesRef.current = routesByAircraft; }, [routesByAircraft]);
 
   const [activeEvent, setActiveEvent] = useState(null);
   const [disruptionState, setDisruptionState] = useState({
     frozenAircraft: [],
     delayedAirport: null,
-    charterBonusActive: false,
+    charterBonusActive: false
   });
+  const [timeLeft, setTimeLeft] = useState(20 * 60);
+  const [showConstraints, setShowConstraints] = useState(false);
 
-  const [timeLeft, setTimeLeft] = useState(20 * 60); // 20 minutes
-  const [showConstraints, setShowConstraints] = useState(true);
+  const getAircraftType = (id) => (id === 'A1' ? 'A320' : 'A321');
 
-  // Utility: get aircraft type from id
-  const getAircraftType = (aircraftId) =>
-    aircraftId === 'A1' ? 'A320' : 'A321';
-
-  // MAIN HANDLE DROP
   const handleRouteDrop = (aircraftId, route, dropTime = null) => {
     if (disruptionState.frozenAircraft.includes(aircraftId)) {
-      alert(`🧯 Aircraft ${aircraftId} is under tech inspection. Cannot assign routes.`);
-      return;
+      return alert(`🚫 Aircraft ${aircraftId} is unavailable.`);
     }
-
     const aircraftType = getAircraftType(aircraftId);
-    const existingRoutes = routesByAircraft[aircraftId] || [];
+    const existing = routesRef.current[aircraftId] || [];
+    const turnaround = route.turnTimes?.[aircraftType] ?? 40;
+    const [h, m] = route.block.split(':').map(Number);
+    const blockMins = h * 60 + m;
 
-    // Get turnaround for this type
-    const turnaround =
-      route.turnTimes?.[aircraftType] ??
-      (aircraftId === 'A1' ? 35 : aircraftId === 'A2' ? 40 : 50);
-
-    // Parse duration
-    const [h, m] = route.block.split(':');
-    const blockMins = parseInt(h) * 60 + parseInt(m);
-
-    // Start logic
-    let startTime = dropTime !== null ? dropTime : baseTime;
-    if (dropTime === null && existingRoutes.length > 0 && !route.start) {
-      const lastRoute = existingRoutes[existingRoutes.length - 1];
-      startTime = lastRoute.end + turnaround;
-    }
-    if (route.start !== undefined && route.start !== null) {
-      startTime = route.start;
+    let start = dropTime !== null ? dropTime : baseTime;
+    if (dropTime === null && existing.length > 0) {
+      const last = existing[existing.length - 1];
+      start = last.end + turnaround;
     }
 
-    // Apply disruption delay
-    if (
-      disruptionState.delayedAirport &&
-      (route.from === disruptionState.delayedAirport || route.to === disruptionState.delayedAirport)
+    if (disruptionState.delayedAirport &&
+      [route.from, route.to].includes(disruptionState.delayedAirport)
     ) {
-      startTime += 15;
+      start += 15;
     }
 
-    const endTime = startTime + blockMins;
+    const end = start + blockMins;
+    const inboundStart = end + turnaround;
+    const inboundEnd = inboundStart + blockMins;
 
-    // Prepare return
-    const returnLeg = {
+    if (start < baseTime) return alert('🕓 Flight before 06:00.');
+    if (inboundEnd > latestAllowed) return alert('🌙 Arrival after curfew.');
+    const totalDuty = existing.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+    const newDuty = blockMins * 2 + turnaround;
+    if (totalDuty + newDuty > maxDutyTime) return alert('⏱ Duty time exceeded.');
+
+    const proposed = [
+      { start, end },
+      { start: end, end: inboundStart },
+      { start: inboundStart, end: inboundEnd }
+    ];
+    const overlap = existing.some(e =>
+      proposed.some(p => !(e.end <= p.start || e.start >= p.end))
+    );
+    if (overlap) return alert('❌ Overlaps existing flight.');
+
+    const tripId = Date.now() + Math.random();
+    const outbound = { ...route, start, end, id: tripId + '-out', tripId, isTurnaround: false };
+    const turnaroundSeg = {
+      start: end, end: inboundStart,
+      id: tripId + '-turn', tripId,
+      isTurnaround: true, turnaround
+    };
+    const inbound = {
       from: route.to,
       to: route.from,
       block: route.block,
       turnTimes: route.turnTimes,
-    };
-    const inboundStart = endTime + turnaround;
-    const inboundEnd = inboundStart + blockMins;
-
-    // Create tripId
-    const tripId = Date.now() + Math.random();
-
-    // Overlap: Check only vs. other trips
-    const proposedSegments = [
-      { start: startTime, end: endTime },
-      { start: endTime, end: endTime + turnaround },
-      { start: inboundStart, end: inboundEnd }
-    ];
-    const overlaps = existingRoutes.some(r =>
-      proposedSegments.some(seg =>
-        r.tripId !== tripId &&
-        !(r.end <= seg.start || r.start >= seg.end)
-      )
-    );
-    if (overlaps) {
-      alert('❌ Cannot place flight due to overlap.');
-      return;
-    }
-
-    // OUTBOUND
-    const outbound = {
-      ...route,
-      start: startTime,
-      end: endTime,
-      id: tripId + '-out',
-      tripId,
-      aircraftType,
-      isTurnaround: false,
-    };
-    // TURNAROUND BAR
-    const turnaroundBar = {
-      start: endTime,
-      end: endTime + turnaround,
-      id: tripId + '-turn',
-      tripId,
-      aircraftType,
-      isTurnaround: true,
-      turnaround,
-    };
-    // INBOUND
-    const inbound = {
-      ...returnLeg,
-      start: endTime + turnaround,
+      start: inboundStart,
       end: inboundEnd,
       id: tripId + '-in',
       tripId,
-      aircraftType,
-      isTurnaround: false,
+      isTurnaround: false
     };
 
-    // Add all
-    const updated = [...existingRoutes, outbound, turnaroundBar, inbound];
-    updated.sort((a, b) => a.start - b.start);
-
-    setRoutesByAircraft((prev) => ({
-      ...prev,
-      [aircraftId]: updated,
-    }));
+    const updated = [...existing, outbound, turnaroundSeg, inbound]
+      .sort((a, b) => a.start - b.start);
+    setRoutesByAircraft(prev => ({ ...prev, [aircraftId]: updated }));
   };
 
-  // REMOVE: Remove whole trip by tripId
   const handleRouteDelete = (aircraftId, routeId) => {
-    setRoutesByAircraft((prev) => {
-      const allRoutes = prev[aircraftId];
-      const tripId = allRoutes.find(r => r.id === routeId)?.tripId;
-      if (!tripId) return prev;
+    setRoutesByAircraft(prev => {
+      const all = prev[aircraftId];
+      const tid = all.find(r => r.id === routeId)?.tripId;
+      if (!tid) return prev;
+      return { ...prev, [aircraftId]: all.filter(r => r.tripId !== tid) };
+    });
+  };
+
+  const handleUpdateTripStart = (aircraftId, tripId, newStart) => {
+    setRoutesByAircraft(prev => {
+      const arr = prev[aircraftId];
+      const segs = arr.filter(r => r.tripId === tripId);
+      if (segs.length !== 3) return prev;
+
+      const out = segs.find(s => s.id.endsWith('-out'));
+      const turn = segs.find(s => s.id.endsWith('-turn'));
+      const inb = segs.find(s => s.id.endsWith('-in'));
+      if (!out || !turn || !inb) return prev;
+
+      const dur = out.end - out.start;
+      const newOut = { ...out, start: newStart, end: newStart + dur };
+      const newTurn = {
+        ...turn,
+        start: newOut.end,
+        end: newOut.end + (turn.end - turn.start)
+      };
+      const newIn = {
+        ...inb,
+        start: newTurn.end,
+        end: newTurn.end + (inb.end - inb.start)
+      };
+
       return {
         ...prev,
-        [aircraftId]: allRoutes.filter(r => r.tripId !== tripId),
+        [aircraftId]: arr
+          .filter(r => r.tripId !== tripId)
+          .concat([newOut, newTurn, newIn])
+          .sort((a, b) => a.start - b.start)
       };
     });
   };
 
-  // UPDATE: Move all trip segments if the outbound start changes
-  const handleUpdateTripStart = (aircraftId, tripId, newStart) => {
-    setRoutesByAircraft((prev) => {
-      const routes = prev[aircraftId];
-      const tripSegments = routes.filter(r => r.tripId === tripId);
-      if (tripSegments.length !== 3) return prev;
-
-      const [outbound, turnaround, inbound] = [
-        tripSegments.find(r => r.id.endsWith('-out')),
-        tripSegments.find(r => r.id.endsWith('-turn')),
-        tripSegments.find(r => r.id.endsWith('-in')),
-      ];
-      if (!outbound || !turnaround || !inbound) return prev;
-
-      const duration = outbound.end - outbound.start;
-      const turn = turnaround.end - turnaround.start;
-      const inboundDuration = inbound.end - inbound.start;
-
-      const newOutbound = { ...outbound, start: newStart, end: newStart + duration };
-      const newTurnaround = { ...turnaround, start: newOutbound.end, end: newOutbound.end + turn };
-      const newInbound = { ...inbound, start: newTurnaround.end, end: newTurnaround.end + inboundDuration };
-
-      // Replace in array
-      const updatedRoutes = routes
-        .filter(r => r.tripId !== tripId)
-        .concat([newOutbound, newTurnaround, newInbound])
-        .sort((a, b) => a.start - b.start);
-
-      return { ...prev, [aircraftId]: updatedRoutes };
-    });
-  };
-
-  const allAircraft = aircraftList.map((id) => ({
-    id,
-    routes: routesByAircraft[id] || [],
+  const allAircraft = Object.entries(routesByAircraft).map(([id, routes]) => ({
+    id, routes
   }));
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
+    const timer = setInterval(() => setTimeLeft(t => Math.max(0, t - 1)), 1000);
     return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    const disruptions = [
-      {
-        message: '⛑ Crew illness on Aircraft A2 — please remove 1 sector!',
-        type: 'crewIllness',
-        affectedAircraft: 'A2',
-      },
-      {
-        message: '🌩 Weather in LGW — delay all LGW flights by 15 minutes!',
-        type: 'delayAirport',
-        affectedAirport: 'LGW',
-      },
-      {
-        message: '🧯 Tech issue on Aircraft A1 — no new routes can be added for 2 minutes!',
-        type: 'freezeAircraft',
-        affectedAircraft: 'A1',
-      },
-      {
-        message: '🛫 Charter Request — Add a bonus short route to A3 to earn points!',
-        type: 'charterBonus',
-        affectedAircraft: 'A3',
-      },
+    const events = [
+      { message: '⛑ Crew illness on A2—remove 1 sector!', type: 'crewIllness', affectedAircraft: 'A2' },
+      { message: '🌩 Delay at LGW—15min delay!', type: 'delayAirport', affectedAirport: 'LGW' },
+      { message: '🧯 Tech on A1—no new routes for 2min!', type: 'freezeAircraft', affectedAircraft: 'A1' },
+      { message: '🛫 Charter bonus on A3—add a short route!', type: 'charterBonus', affectedAircraft: 'A3' },
     ];
 
-    const triggerRandomEvent = () => {
-      const delay = Math.random() * 30000 + 60000;
+    const schedule = () => {
+      const wait = Math.random() * 30000 + 60000;
       setTimeout(() => {
-        const random = disruptions[Math.floor(Math.random() * disruptions.length)];
-        setActiveEvent(random);
-
-        if (random.type === 'freezeAircraft') {
-          setDisruptionState((prev) => ({
+        const ev = events[Math.floor(Math.random() * events.length)];
+        setActiveEvent(ev);
+        if (ev.type === 'freezeAircraft') {
+          setDisruptionState(prev => ({
             ...prev,
-            frozenAircraft: [...prev.frozenAircraft, random.affectedAircraft],
+            frozenAircraft: [...prev.frozenAircraft, ev.affectedAircraft]
           }));
-          setTimeout(() => {
-            setDisruptionState((prev) => ({
-              ...prev,
-              frozenAircraft: prev.frozenAircraft.filter(
-                (id) => id !== random.affectedAircraft
-              ),
-            }));
-          }, 2 * 60 * 1000);
-        }
-
-        if (random.type === 'delayAirport') {
-          setDisruptionState((prev) => ({
+          setTimeout(() => setDisruptionState(prev => ({
             ...prev,
-            delayedAirport: random.affectedAirport,
-          }));
-          setTimeout(() => {
-            setDisruptionState((prev) => ({ ...prev, delayedAirport: null }));
-          }, 2 * 60 * 1000);
+            frozenAircraft: prev.frozenAircraft.filter(a => a !== ev.affectedAircraft)
+          })), 120000);
         }
-
-        if (random.type === 'crewIllness') {
-          setRoutesByAircraft((prev) => {
-            const updated = { ...prev };
-            updated[random.affectedAircraft].pop();
-            return updated;
+        if (ev.type === 'delayAirport') {
+          setDisruptionState(prev => ({ ...prev, delayedAirport: ev.affectedAirport }));
+          setTimeout(() => setDisruptionState(prev => ({ ...prev, delayedAirport: null })), 120000);
+        }
+        if (ev.type === 'crewIllness') {
+          setRoutesByAircraft(prev => {
+            const cpy = { ...prev };
+            cpy[ev.affectedAircraft]?.pop();
+            return cpy;
           });
         }
-
-        if (random.type === 'charterBonus') {
-          setDisruptionState((prev) => ({ ...prev, charterBonusActive: true }));
-          setTimeout(() => {
-            setDisruptionState((prev) => ({ ...prev, charterBonusActive: false }));
-          }, 2 * 60 * 1000);
+        if (ev.type === 'charterBonus') {
+          setDisruptionState(prev => ({ ...prev, charterBonusActive: true }));
+          setTimeout(() => setDisruptionState(prev => ({ ...prev, charterBonusActive: false })), 120000);
         }
-
-        triggerRandomEvent();
-      }, delay);
+        schedule();
+      }, wait);
     };
-
-    triggerRandomEvent();
+    schedule();
   }, []);
 
   return (
-    <DndProvider backend={HTML5Backend}>
-      <div style={{ padding: '1rem', fontFamily: 'Arial, sans-serif' }}>
-        <h1 style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
-          Captain's Challenge: Schedule Mastery
-        </h1>
-
-        <div style={{ textAlign: 'center', fontSize: '1.2rem', marginBottom: '1rem' }}>
-          ⏳ Time Left: {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
+    <DndProvider backend={isTouch ? TouchBackend : HTML5Backend} options={isTouch ? { enableMouseEvents: true } : undefined}>
+      <div className="app-container">
+        <div className="top-bar">
+          <h1>🧠 Schedule Mastery</h1>
+          <span>⏳ {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}</span>
+          <button onClick={() => setShowConstraints(c => !c)}>
+            {showConstraints ? 'Hide' : 'Show'} Constraints
+          </button>
         </div>
 
         <Scoreboard allAircraft={allAircraft} />
-
         <EventModal event={activeEvent} onAcknowledge={() => setActiveEvent(null)} />
 
-        <div style={{ display: 'flex' }}>
-          <div style={{ flex: 1 }}>
+        <div className="layout">
+          <div className="main-gantt">
             <GanttSchedule
               routesByAircraft={routesByAircraft}
               onRouteDrop={handleRouteDrop}
@@ -301,32 +219,14 @@ const SchedulingGame = () => {
               onUpdateTripStart={handleUpdateTripStart}
             />
           </div>
-
-          <div style={{ width: '250px', paddingLeft: '1rem' }}>
-            <button
-              onClick={() => setShowConstraints(!showConstraints)}
-              style={{
-                marginBottom: '0.5rem',
-                padding: '6px 12px',
-                backgroundColor: '#1890ff',
-                color: 'white',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: 'pointer',
-              }}
-            >
-              {showConstraints ? 'Hide' : 'Show'} Constraints
-            </button>
-
-            {showConstraints && (
-              <div style={{ border: '1px solid #ddd', padding: '0.5rem', borderRadius: '5px' }}>
-                <ConstraintsPanel />
-              </div>
-            )}
-          </div>
+          <RouteLibrary />
         </div>
 
-        <RouteLibrary />
+        {showConstraints && (
+          <div className="overlay-constraints">
+            <ConstraintsPanel />
+          </div>
+        )}
       </div>
     </DndProvider>
   );

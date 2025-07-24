@@ -16,8 +16,10 @@ const mockRoutes = [
 const RouteTile = ({ route }) => {
   const [{ isDragging }, drag] = useDrag(() => ({
     type: 'ROUTE',
-    // ensure id is always undefined for new drags!
-    item: { ...route, id: undefined },
+    item: (() => {
+      const { start, end, ...cleanRoute } = route;
+      return { ...cleanRoute, id: undefined };
+    })(),
     collect: (monitor) => ({
       isDragging: monitor.isDragging(),
     }),

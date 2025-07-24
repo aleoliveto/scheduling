@@ -1,12 +1,13 @@
 import React from 'react';
+import './components/App.scss';
 import SchedulingGame from './components/SchedulingGame';
 
-function App() {
+const App = () => {
   return (
     <div className="App">
       <SchedulingGame />
     </div>
   );
-}
+};
 
 export default App;
