@@ -1,285 +1,105 @@
+// src/components/GanttSchedule.js
 import React, { useRef } from 'react';
-import { useDrop } from 'react-dnd';
+import { useDrop, useDrag } from 'react-dnd';
+import './GanttSchedule.scss';
 
-const baseTime = 360; // 06:00 in minutes
-const totalMinutes = 1080; // 18 hours (06:00 to 24:00)
-const hours = Array.from({ length: 19 }, (_, i) => 6 + i); // 06:00–24:00
-const timelineWidth = 1140; // 19 * 60px
+const baseTime = 360;
+const totalMinutes = 1080;
+const hours = Array.from({ length: 19 }, (_, i) => 6 + i);
 
-const GanttSchedule = ({
-  routesByAircraft,
-  onRouteDrop,
-  onRouteDelete,
-  onUpdateTripStart
-}) => {
+export default function GanttSchedule({ routesByAircraft, onRouteDrop, onRouteDelete, onUpdateTripStart }) {
   return (
-    <div style={{ padding: '1rem' }}>
-      <div style={{ width: `${timelineWidth + 100}px`, overflowX: 'auto' }}>
-        {/* Timeline Header */}
-        <div style={{ display: 'flex', width: `${timelineWidth}px`, marginLeft: '100px' }}>
-          {hours.map((hour) => (
-            <div
-              key={hour}
-              style={{
-                width: '60px',
-                textAlign: 'center',
-                fontSize: '0.8rem',
-                borderLeft: '1px solid #ddd',
-              }}
-            >
-              {String(hour).padStart(2, '0')}:00
-            </div>
-          ))}
-        </div>
+    <div className="gantt-container">
+      <div className="timeline-header">
+        <div className="aircraft-label-placeholder" />
+        {hours.map(h => (
+          <div key={h} className="timeline-hour">{`${String(h).padStart(2,'0')}:00`}</div>
+        ))}
+      </div>
 
-        {/* Aircraft Rows */}
-        {Object.entries(routesByAircraft).map(([aircraftId, assignedRoutes]) => (
-          <AircraftRow
-            key={aircraftId}
-            aircraftId={aircraftId}
-            assignedRoutes={assignedRoutes}
-            onRouteDrop={onRouteDrop}
-            onRouteDelete={onRouteDelete}
-            onUpdateTripStart={onUpdateTripStart}
-            timelineWidth={timelineWidth}
+      {Object.entries(routesByAircraft).map(([aircraftId, segments]) => (
+        <AircraftRow
+          key={aircraftId}
+          aircraftId={aircraftId}
+          segments={segments}
+          onRouteDrop={onRouteDrop}
+          onRouteDelete={onRouteDelete}
+          onUpdateTripStart={onUpdateTripStart}
+        />
+      ))}
+    </div>
+  );
+}
+
+function AircraftRow({ aircraftId, segments, onRouteDrop, onRouteDelete, onUpdateTripStart }) {
+  const ref = useRef(null);
+  const [{ isOver }, drop] = useDrop({
+    accept: 'ROUTE',
+    drop: (item, monitor) => {
+      const rect = ref.current?.getBoundingClientRect();
+      const x = monitor.getClientOffset()?.x - rect.left;
+      const percent = Math.max(0, Math.min(1, x / rect.width));
+      const dropTime = baseTime + Math.round(percent * totalMinutes);
+      onRouteDrop(aircraftId, item, dropTime);
+    },
+    collect: monitor => ({ isOver: monitor.isOver({ shallow: true }) })
+  });
+  drop(ref);
+
+  return (
+    <div className="aircraft-row">
+      <div className="aircraft-label">✈ {aircraftId}</div>
+      <div ref={ref} className={`timeline ${isOver ? 'over' : ''}`}>
+        {segments.map(route => (
+          <Segment
+            key={route.id}
+            route={route}
+            onDelete={() => onRouteDelete(aircraftId, route.id)}
+            onStartChange={route.id.endsWith('-out') ? value => onUpdateTripStart(aircraftId, route.tripId, +value) : null}
           />
         ))}
       </div>
     </div>
   );
-};
+}
 
-const AircraftRow = ({
-  aircraftId,
-  assignedRoutes,
-  onRouteDrop,
-  onRouteDelete,
-  onUpdateTripStart,
-  timelineWidth
-}) => {
-  const containerRef = useRef(null);
+function Segment({ route, onDelete, onStartChange }) {
+  const widthPercent = ((route.end - route.start) / totalMinutes) * 100;
+  const leftPercent = ((route.start - baseTime) / totalMinutes) * 100;
+  const mode = route.isTurnaround ? 'turnaround' : 'outbound';
 
-  const [{ isOver }, drop] = useDrop(() => ({
-    accept: 'ROUTE',
-    drop: (item, monitor) => {
-      if (!containerRef.current) return;
-      const boundingRect = containerRef.current.getBoundingClientRect();
-      const clientOffset = monitor.getClientOffset();
-      if (!clientOffset) return;
-
-      const relativeX = clientOffset.x - boundingRect.left;
-      const percent = Math.min(Math.max(relativeX / timelineWidth, 0), 1);
-      const dropTime = baseTime + Math.floor(percent * totalMinutes);
-
-      onRouteDrop(aircraftId, item, dropTime);
-    },
-    collect: (monitor) => ({
-      isOver: monitor.isOver({ shallow: true }),
-    }),
-  }));
-
-  drop(containerRef);
-
-  // Dropdown options (every 5 min between 06:00 and 24:00)
-  const startOptions = [];
-  for (let mins = baseTime; mins <= baseTime + totalMinutes - 5; mins += 5) {
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    const label = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    startOptions.push(
-      <option key={mins} value={mins}>
-        {label}
-      </option>
-    );
-  }
-
-  const formatTime = (mins) => {
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  };
+  const [{ isDragging }, drag] = useDrag({
+    type: 'SEGMENT',
+    item: { id: route.id },
+    collect: m => ({ isDragging: m.isDragging() })
+  });
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
-      <div style={{ width: '100px', fontWeight: 'bold' }}>✈ {aircraftId}</div>
-      <div
-        ref={containerRef}
-        style={{
-          position: 'relative',
-          width: `${timelineWidth}px`,
-          height: '50px',
-          border: '1px dashed #aaa',
-          backgroundColor: isOver ? '#f0f0f0' : '#fff',
-          overflow: 'hidden'
-        }}
-      >
-        {assignedRoutes.map((route) => {
-          const startPercent = ((route.start - baseTime) / totalMinutes) * 100;
-          const widthPercent = ((route.end - route.start) / totalMinutes) * 100;
-
-          // --- Outbound (first sector of the trip) ---
-          if (!route.isTurnaround && route.id.endsWith('-out')) {
-            const onStartTimeChange = (e) => {
-              const newStart = parseInt(e.target.value, 10);
-              onUpdateTripStart(aircraftId, route.tripId, newStart);
-            };
-            return (
-              <div
-                key={route.id}
-                title={`${route.from} → ${route.to}\n${formatTime(route.start)}–${formatTime(route.end)}`}
-                style={{
-                  position: 'absolute',
-                  left: `${startPercent}%`,
-                  width: `${widthPercent}%`,
-                  height: '100%',
-                  backgroundColor: '#69c0ff',
-                  color: 'white',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: '4px',
-                  fontSize: '0.8rem',
-                  border: '2px solid #0050b3',
-                  boxSizing: 'border-box',
-                  userSelect: 'none',
-                  zIndex: 3
-                }}
-              >
-                <span>{route.from} → {route.to}</span>
-                <select
-                  value={route.start}
-                  onChange={onStartTimeChange}
-                  style={{
-                    marginTop: 2,
-                    fontSize: '0.7rem',
-                    borderRadius: '3px',
-                    border: 'none',
-                    outline: 'none',
-                    color: '#003a8c',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    width: '70%',
-                  }}
-                >
-                  {startOptions}
-                </select>
-                <button
-                  onClick={() => onRouteDelete(aircraftId, route.id)}
-                  style={{
-                    position: 'absolute',
-                    top: '2px',
-                    right: '4px',
-                    background: 'transparent',
-                    color: 'white',
-                    border: 'none',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                  }}
-                  title="Delete whole trip"
-                >
-                  ✖
-                </button>
-              </div>
-            );
-          }
-
-          // --- Turnaround segment ---
-          if (route.isTurnaround) {
-            return (
-              <div
-                key={route.id}
-                title={`Turnaround: ${route.turnaround || (route.end - route.start)} min`}
-                style={{
-                  position: 'absolute',
-                  left: `${startPercent}%`,
-                  width: `${widthPercent}%`,
-                  height: '100%',
-                  backgroundColor: '#f5222d',
-                  opacity: 0.7,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'white',
-                  borderRadius: '4px',
-                  fontSize: '0.8rem',
-                  fontWeight: 'bold',
-                  zIndex: 2
-                }}
-              >
-                {route.turnaround || (route.end - route.start)} min Turn
-                <button
-                  onClick={() => onRouteDelete(aircraftId, route.id)}
-                  style={{
-                    position: 'absolute',
-                    top: '2px',
-                    right: '4px',
-                    background: 'transparent',
-                    color: 'white',
-                    border: 'none',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                  }}
-                  title="Delete whole trip"
-                >
-                  ✖
-                </button>
-              </div>
-            );
-          }
-
-          // --- Inbound segment ---
-          if (!route.isTurnaround && route.id.endsWith('-in')) {
-            return (
-              <div
-                key={route.id}
-                title={`${route.from} → ${route.to}\n${formatTime(route.start)}–${formatTime(route.end)}`}
-                style={{
-                  position: 'absolute',
-                  left: `${startPercent}%`,
-                  width: `${widthPercent}%`,
-                  height: '100%',
-                  backgroundColor: '#69c0ff',
-                  color: 'white',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: '4px',
-                  fontSize: '0.8rem',
-                  border: '2px solid #0050b3',
-                  boxSizing: 'border-box',
-                  userSelect: 'none',
-                  zIndex: 3
-                }}
-              >
-                <span>{route.from} → {route.to}</span>
-                <button
-                  onClick={() => onRouteDelete(aircraftId, route.id)}
-                  style={{
-                    position: 'absolute',
-                    top: '2px',
-                    right: '4px',
-                    background: 'transparent',
-                    color: 'white',
-                    border: 'none',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                  }}
-                  title="Delete whole trip"
-                >
-                  ✖
-                </button>
-              </div>
-            );
-          }
-
-          // Should not hit this, but return null if segment is malformed
-          return null;
-        })}
+    <div
+      ref={drag}
+      style={{ width: `${widthPercent}%`, left: `${leftPercent}%`, opacity: isDragging ? 0.7 : 1 }}
+      className={`segment ${mode}`}
+    >
+      <div className="info">
+        {!route.isTurnaround ? route.from + ' → ' + route.to : `${route.turnaround || route.end - route.start}m Turn`}
+        {onStartChange && (
+          <select
+            className="start-select"
+            value={route.start}
+            onChange={e => onStartChange(e.target.value)}
+          >
+            {Array.from({ length:  (totalMinutes / 5) + 1 }, (_, i) => {
+              const m = baseTime + i * 5;
+              const hh = Math.floor(m/60);
+              const mm = m%60;
+              return (
+                <option key={m} value={m}>{`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`}</option>
+              );
+            })}
+          </select>
+        )}
       </div>
+      <button className="delete-btn" onClick={onDelete}>✖</button>
     </div>
   );
-};
-
-export default GanttSchedule;
+}
