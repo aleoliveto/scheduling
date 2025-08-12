@@ -1,4 +1,3 @@
-// src/components/SchedulingGame.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -11,11 +10,23 @@ import Scoreboard from './Scoreboard';
 import EventModal from './EventModal';
 import SummaryModal from './SummaryModal';
 
+import { ROUTES, TURN_TIMES, initialAvailability, toMinutes } from '../data/routesData';
 import './App.scss';
 
 const baseTime = 360;       // 06:00
 const latestAllowed = 1380; // 23:00
-const maxDutyTime = 720;    // aircraft-day guard (12h)
+const maxDutyTime = 720;    // day guard (12h)
+
+// sector points grow with duration (shorter = fewer points)
+const sectorPoints = (mins) => Math.max(2, Math.min(8, Math.floor(mins / 30)));
+const TYPE_POINTS = { Holidays: 5, Leisure: 3, Domestic: 2 };
+const UTIL_BONUS_MIN = 8 * 60;
+const UTIL_BONUS_POINTS = 10;
+const LATE_DUTY_PENALTY = 10;
+const CURFEW_PENALTY = 15;
+const IDLE_STEP = 30;
+
+const dutyLimitFor = (startMins) => (startMins < 420 ? 420 : 600);
 
 function recomputeCrewStateForAircraft(segments) {
   const nonTurn = segments.filter(s => !s.isTurnaround && !s.isCrewChange);
@@ -28,8 +39,6 @@ function recomputeCrewStateForAircraft(segments) {
   const dutyStart = lastCrewSegs[0]?.start ?? null;
   return { crewIndex: maxCrew, sectors, dutyStart, pendingChange: false, pendingCrewIndex: null };
 }
-
-/** Remove crew-change markers that no longer align with any segment start */
 function cleanUpCrewMarkers(list) {
   const starts = new Set(list.filter(s => !s.isCrewChange).map(s => s.start));
   return list.filter(s => !s.isCrewChange || starts.has(s.end));
@@ -43,6 +52,8 @@ export default function SchedulingGame() {
   const [routesByAircraft, setRoutesByAircraft] = useState({ A1: [], A2: [], A3: [] });
   const routesRef = useRef(routesByAircraft);
   useEffect(() => { routesRef.current = routesByAircraft; }, [routesByAircraft]);
+
+  const [availability, setAvailability] = useState(initialAvailability);
 
   const [crewByAc, setCrewByAc] = useState({
     A1: { crewIndex: 1, sectors: 0, dutyStart: null, pendingChange: false, pendingCrewIndex: null },
@@ -61,24 +72,20 @@ export default function SchedulingGame() {
   const [showConstraints, setShowConstraints] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
 
-  // Timer
-  useEffect(() => {
-    const t = setInterval(() => setTimeLeft(s => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(t);
-  }, []);
+  useEffect(() => { const t = setInterval(() => setTimeLeft(s => Math.max(0, s - 1)), 1000); return () => clearInterval(t); }, []);
   useEffect(() => { if (timeLeft === 0) setShowSummary(true); }, [timeLeft]);
 
   const getAircraftType = id => (id === 'A1' ? 'A320' : 'A321');
+  const minTurn = (airport, acType) => TURN_TIMES[airport]?.[acType] ?? 40;
 
-  /** Arm a manual crew change for the next trip (+10m gap). nextCrewIndex: 1 or 2 */
   const forceCrewChange = (aircraftId, nextCrewIndex) => {
+    const idx = Math.max(1, Math.min(2, nextCrewIndex || 2));
     setCrewByAc(prev => ({
       ...prev,
-      [aircraftId]: { ...prev[aircraftId], pendingChange: true, pendingCrewIndex: nextCrewIndex }
+      [aircraftId]: { ...prev[aircraftId], pendingChange: true, pendingCrewIndex: idx }
     }));
   };
 
-  /** Sort, cleanup markers, persist, and recompute crew state */
   const updateRoutes = (aircraftId, newList) => {
     const sorted = [...newList].sort((a, b) => a.start - b.start);
     const cleaned = cleanUpCrewMarkers(sorted);
@@ -88,124 +95,138 @@ export default function SchedulingGame() {
   };
 
   const handleRouteDrop = (aircraftId, route, dropTime = null) => {
+    // inventory gate
+    if ((availability[route.id] ?? 0) <= 0) {
+      alert('No more of this route available.');
+      return;
+    }
     if (disruptionState.frozenAircraft.includes(aircraftId)) {
       alert(`Aircraft ${aircraftId} is unavailable.`);
       return;
     }
 
-    const aircraftType = getAircraftType(aircraftId);
+    const acType = getAircraftType(aircraftId);
     const existing = routesRef.current[aircraftId] || [];
+    const blockMins = toMinutes(route.block);
 
-    // Base desired start (+ any airport delay)
     let desiredStart = dropTime ?? baseTime;
     if (disruptionState.delayedAirport && [route.from, route.to].includes(disruptionState.delayedAirport)) {
       desiredStart += 15;
     }
 
-    // Crew state
+    // crew logic
     let { crewIndex, sectors, dutyStart, pendingChange, pendingCrewIndex } = crewByAc[aircraftId];
     let crewChangeMarker = null;
-
-    // If user armed a change, consume +10m
     if (pendingChange) desiredStart += 10;
 
-    // Plan at desiredStart
-    let plannedTrip = scheduleTripWithAutoResolve(existing, route, aircraftType, desiredStart);
-    if (!plannedTrip) {
-      alert('No space before curfew without overlap.');
-      return;
-    }
+    // use exact turn times (downroute + base)
+    const turnDown = minTurn(route.to, acType);
+    const turnBase = minTurn(route.from, acType);
+
+    // we’ll ask the auto-resolver to place at desiredStart, then we’ll insert a base turn *after* inbound if needed later
+    let plannedTrip = scheduleTripWithAutoResolve(
+      existing,
+      { ...route, turnTimes: { [acType]: turnDown } }, // keep API shape the same
+      acType,
+      desiredStart
+    );
+    if (!plannedTrip) { alert('No space before curfew without overlap.'); return; }
 
     const outSeg = plannedTrip.find(s => s.id.endsWith('-out'));
     const inSeg  = plannedTrip.find(s => s.id.endsWith('-in'));
     const tripEnd = inSeg.end;
 
-    // Duty constraints (Early: start <07:00 => 7h limit; otherwise 10h). Max 4 sectors/crew.
+    // duty limits
     const effectiveDutyStart = dutyStart ?? outSeg.start;
-    const dutyLimit = effectiveDutyStart < 420 ? 420 : 600;
-
+    const limit = dutyLimitFor(effectiveDutyStart);
     const wouldExceedSectors = (sectors + 2) > 4;
-    const wouldExceedTime = (tripEnd - effectiveDutyStart) > dutyLimit;
+    const wouldExceedTime = (tripEnd - effectiveDutyStart) > limit;
 
-    // Auto crew change if constraints would be violated
     if (wouldExceedSectors || wouldExceedTime) {
+      if (crewIndex >= 2) { alert('Crew limits reached (max 2 crews).'); return; }
       desiredStart += 10;
-      const rePlanned = scheduleTripWithAutoResolve(existing, route, aircraftType, desiredStart);
-      if (!rePlanned) {
-        alert('No space after crew change before curfew.');
-        return;
-      }
+      const rePlanned = scheduleTripWithAutoResolve(
+        existing,
+        { ...route, turnTimes: { [acType]: turnDown } },
+        acType,
+        desiredStart
+      );
+      if (!rePlanned) { alert('No space after crew change before curfew.'); return; }
 
-      // Add crew-change marker at the boundary (dedupe if already present)
       const markerEnd = desiredStart;
       const markerExists = existing.some(s => s.isCrewChange && s.end === markerEnd);
       if (!markerExists) {
         const markerId = Date.now() + Math.random();
-        crewChangeMarker = {
-          start: desiredStart - 10,
-          end: desiredStart,
-          id: `${markerId}-crewchange`,
-          tripId: `crewchange-${markerId}`,
-          isCrewChange: true,
-        };
+        crewChangeMarker = { start: desiredStart - 10, end: desiredStart, id: `${markerId}-crewchange`, tripId: `crewchange-${markerId}`, isCrewChange: true };
       }
 
       plannedTrip = rePlanned;
-      crewIndex += 1;
+      crewIndex = 2;
       sectors = 0;
       dutyStart = rePlanned.find(s => s.id.endsWith('-out')).start;
-      pendingChange = false;
-      pendingCrewIndex = null;
+      pendingChange = false; pendingCrewIndex = null;
     }
 
-    // Manual change (if armed) and auto didn't already handle it
     if (crewByAc[aircraftId].pendingChange && !crewChangeMarker) {
+      const target = pendingCrewIndex || (crewIndex === 1 ? 2 : 1);
+      desiredStart += 10;
+      const rePlanned = scheduleTripWithAutoResolve(
+        existing,
+        { ...route, turnTimes: { [acType]: turnDown } },
+        acType,
+        desiredStart
+      );
+      if (!rePlanned) { alert('No space after crew change before curfew.'); return; }
+
       const markerEnd = desiredStart;
       const markerExists = existing.some(s => s.isCrewChange && s.end === markerEnd);
       if (!markerExists) {
         const markerId = Date.now() + Math.random();
-        crewChangeMarker = {
-          start: desiredStart - 10,
-          end: desiredStart,
-          id: `${markerId}-crewchange`,
-          tripId: `crewchange-${markerId}`,
-          isCrewChange: true,
-        };
+        crewChangeMarker = { start: desiredStart - 10, end: desiredStart, id: `${markerId}-crewchange`, tripId: `crewchange-${markerId}`, isCrewChange: true };
       }
-      crewIndex = pendingCrewIndex || (crewIndex + 1);
+
+      plannedTrip = rePlanned;
+      crewIndex = target;
       sectors = 0;
-      dutyStart = plannedTrip.find(s => s.id.endsWith('-out')).start;
-      pendingChange = false;
-      pendingCrewIndex = null;
+      dutyStart = rePlanned.find(s => s.id.endsWith('-out')).start;
+      pendingChange = false; pendingCrewIndex = null;
     }
 
-    // Aircraft-day guard
+    // aircraft-day guard
     const addedDuty = plannedTrip.reduce((s, seg) => s + (seg.end - seg.start), 0);
     const currentDuty = existing.reduce((s, seg) => s + (seg.end - seg.start), 0);
-    if (currentDuty + addedDuty > maxDutyTime) {
-      alert('Duty time exceeded for aircraft day.');
-      return;
-    }
+    if (currentDuty + addedDuty > maxDutyTime) { alert('Duty time exceeded for aircraft day.'); return; }
 
-    // Tag segments with crew index (and type for scoring)
+    // tag with crew + routeKey (so we can restore inventory on delete) + type for scoring
     const tagged = plannedTrip.map(s =>
-      s.isTurnaround ? { ...s, crewIndex } : { ...s, crewIndex, type: s.type || route.type }
+      s.isTurnaround
+        ? { ...s, crewIndex }
+        : { ...s, crewIndex, type: route.type, routeKey: route.id, blockMins }
     );
     sectors += 2;
 
     const base = crewChangeMarker ? [...existing, crewChangeMarker, ...tagged] : [...existing, ...tagged];
     updateRoutes(aircraftId, base);
 
-    setCrewByAc(prev => ({
-      ...prev,
-      [aircraftId]: { crewIndex, sectors, dutyStart, pendingChange, pendingCrewIndex }
-    }));
+    // decrement availability on successful placement
+    setAvailability(prev => ({ ...prev, [route.id]: Math.max(0, (prev[route.id] ?? 0) - 1) }));
+
+    setCrewByAc(prev => ({ ...prev, [aircraftId]: { crewIndex, sectors, dutyStart, pendingChange, pendingCrewIndex } }));
+  };
+
+  const restoreAvailabilityForTrip = (list, tripId) => {
+    const out = list.find(s => s.tripId === tripId && s.id.endsWith('-out'));
+    if (out?.routeKey) {
+      setAvailability(prev => ({ ...prev, [out.routeKey]: (prev[out.routeKey] ?? 0) + 1 }));
+    }
   };
 
   const handleRouteDelete = (aircraftId, routeId) => {
     const list = routesRef.current[aircraftId] || [];
     const tid = list.find(r => r.id === routeId)?.tripId;
     if (!tid) return;
+
+    restoreAvailabilityForTrip(list, tid);
     updateRoutes(aircraftId, list.filter(s => s.tripId !== tid));
   };
 
@@ -235,19 +256,10 @@ export default function SchedulingGame() {
     updateRoutes(aircraftId, remaining.concat([newOut, newTurn, newIn]));
   };
 
-  const allAircraft = Object.entries(routesByAircraft).map(([id, routes]) => ({ id, routes }));
-
-  // ------- Random events (safe loop) -------
+  // random events (with inventory restore for crew illness)
   const eventTimeoutRef = useRef(null);
-  const clearEventTimeout = () => {
-    if (eventTimeoutRef.current) { clearTimeout(eventTimeoutRef.current); eventTimeoutRef.current = null; }
-  };
-  const scheduleNextEvent = () => {
-    clearEventTimeout();
-    const wait = Math.random() * 30000 + 60000; // 60–90s
-    eventTimeoutRef.current = setTimeout(fireRandomEvent, wait);
-  };
-
+  const clearEventTimeout = () => { if (eventTimeoutRef.current) { clearTimeout(eventTimeoutRef.current); eventTimeoutRef.current = null; } };
+  const scheduleNextEvent = () => { clearEventTimeout(); const wait = Math.random() * 30000 + 60000; eventTimeoutRef.current = setTimeout(fireRandomEvent, wait); };
   const fireRandomEvent = () => {
     const candidates = [
       { message: 'Crew illness on A2. Removing last trip.', type: 'crewIllness', affectedAircraft: 'A2' },
@@ -259,13 +271,14 @@ export default function SchedulingGame() {
     const usable = candidates.filter(ev =>
       ev.type !== 'crewIllness' || (state[ev.affectedAircraft] || []).some(s => s.id?.endsWith('-in'))
     );
-
     const ev = usable[Math.floor(Math.random() * usable.length)] || candidates[0];
     setActiveEvent(ev);
 
     if (ev.type === 'freezeAircraft') {
       setDisruptionState(p => ({ ...p, frozenAircraft: [...p.frozenAircraft, ev.affectedAircraft] }));
-      setTimeout(() => setDisruptionState(p => ({ ...p, frozenAircraft: p.frozenAircraft.filter(a => a !== ev.affectedAircraft) })), 120000);
+      setTimeout(() =>
+        setDisruptionState(p => ({ ...p, frozenAircraft: p.frozenAircraft.filter(a => a !== ev.affectedAircraft) })),
+      120000);
     }
     if (ev.type === 'delayAirport') {
       setDisruptionState(p => ({ ...p, delayedAirport: ev.affectedAirport }));
@@ -275,21 +288,72 @@ export default function SchedulingGame() {
       const ac = ev.affectedAircraft;
       const list = routesRef.current[ac] || [];
       if (list.length > 0) {
-        const lastTripId = list
+        const lastTrip = list
           .filter(s => s.tripId && s.id.endsWith('-in'))
-          .reduce((acc, s) => (!acc || s.end > acc.end ? { id: s.tripId, end: s.end } : acc), null)?.id;
-        if (lastTripId) updateRoutes(ac, list.filter(s => s.tripId !== lastTripId));
+          .reduce((acc, s) => (!acc || s.end > acc.end ? { tripId: s.tripId, end: s.end } : acc), null);
+        if (lastTrip) {
+          restoreAvailabilityForTrip(list, lastTrip.tripId);
+          updateRoutes(ac, list.filter(s => s.tripId !== lastTrip.tripId));
+        }
       }
     }
     if (ev.type === 'charterBonus') {
       setDisruptionState(p => ({ ...p, charterBonusActive: true }));
       setTimeout(() => setDisruptionState(p => ({ ...p, charterBonusActive: false })), 120000);
     }
-
     scheduleNextEvent();
   };
-
   useEffect(() => { scheduleNextEvent(); return () => clearEventTimeout(); }, []);
+
+  // scoring per aircraft (longer flights → more points)
+  const scoreAircraftDay = (segments) => {
+    const flights = segments.filter(s => !s.isTurnaround && !s.isCrewChange).sort((a, b) => a.start - b.start);
+    const turns   = segments.filter(s => s.isTurnaround);
+    let points = 0;
+    let flightMins = 0;
+
+    for (const f of flights) {
+      const mins = f.blockMins ?? (f.end - f.start);
+      points += sectorPoints(mins);
+      if (f.type && TYPE_POINTS[f.type]) points += TYPE_POINTS[f.type];
+      flightMins += mins;
+    }
+    if (flightMins >= UTIL_BONUS_MIN) points += UTIL_BONUS_POINTS;
+
+    const lastArrival = flights.length ? flights[flights.length - 1].end : 0;
+    if (lastArrival > 1350) points -= LATE_DUTY_PENALTY;
+
+    const inCurfew = (t) => t < 330 || t >= 1380;
+    const violatesCurfew = segments.some(s => !s.isCrewChange && (inCurfew(s.start) || inCurfew(s.end)));
+    if (violatesCurfew) points -= CURFEW_PENALTY;
+
+    const seq = [...flights, ...turns].sort((a, b) => a.start - b.start);
+    let idle = 0;
+    for (let i = 1; i < seq.length; i++) idle += Math.max(0, seq[i].start - seq[i - 1].end);
+    points -= Math.floor(idle / IDLE_STEP);
+
+    return { points, flightMins };
+  };
+
+  // derived for UI
+  const allAircraft = Object.entries(routesByAircraft).map(([id, routes]) => {
+    // kpis per crew
+    const flights = routes.filter(s => !s.isTurnaround && !s.isCrewChange);
+    const byCrew = new Map();
+    for (const s of flights) {
+      const idx = s.crewIndex || 1;
+      if (!byCrew.has(idx)) byCrew.set(idx, []);
+      byCrew.get(idx).push(s);
+    }
+    const kpis = [...byCrew.entries()].map(([idx, arr]) => {
+      arr.sort((a, b) => a.start - b.start);
+      const start = arr[0].start, end = arr[arr.length - 1].end;
+      return { crewIndex: idx, sectors: arr.length, dutyStart: start, dutyEnd: end, dutyMins: end - start, limitMins: dutyLimitFor(start) };
+    }).sort((a, b) => a.crewIndex - b.crewIndex);
+
+    const { points, flightMins } = scoreAircraftDay(routes);
+    return { id, routes, kpis, points, flightMins };
+  });
 
   return (
     <DndProvider
@@ -318,7 +382,9 @@ export default function SchedulingGame() {
             onUpdateTripStart={handleUpdateTripStart}
             onForceCrewChange={forceCrewChange}
           />
-          <RouteLibrary />
+
+          {/* Route library shows remaining counts; tiles disable at 0 */}
+          <RouteLibrary availability={availability} />
         </div>
 
         {showConstraints && (
