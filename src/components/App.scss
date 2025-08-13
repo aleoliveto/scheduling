@@ -1,6 +1,6 @@
 .app-container {
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-  color: #1f2328;
+  color: #f0f0f0;
   padding: 12px;
 }
 
@@ -10,8 +10,8 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 14px;
-  background: #fff;
-  border: 1px solid #eee;
+  background: #1e1e1e;
+  border: 1px solid #333;
   border-radius: 12px;
   margin-bottom: 12px;
   position: sticky;
@@ -19,7 +19,7 @@
   z-index: 3;
 }
 
-.top-bar h1 { font-size: 1.2rem; margin: 0; }
+.top-bar h1 { font-size: 1.2rem; margin: 0; color: #fff; }
 
 button {
   background: #ff6600;
@@ -31,6 +31,7 @@ button {
   cursor: pointer;
 }
 button:disabled { opacity: .6; cursor: default; }
+button:hover:not(:disabled) { background: #e65c00; }
 
 .overlay-constraints {
   position: fixed;
@@ -39,12 +40,13 @@ button:disabled { opacity: .6; cursor: default; }
   width: min(420px, 90vw);
   max-height: 70vh;
   overflow: auto;
-  background: #fff;
-  border: 1px solid #eee;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  background: #1f1f1f;
+  border: 1px solid #333;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
   border-radius: 16px;
   padding: 16px;
   z-index: 10;
+  color: #fff;
 }
 
 /* main column since routes are below the chart */
