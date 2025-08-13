@@ -55,6 +55,11 @@ button:hover:not(:disabled) { background: #e65c00; }
   flex-direction: column;
   gap: 16px;
 }
+html, body, #root {
+  background: linear-gradient(160deg, #121212, #1a1a1a);
+  color: #f0f0f0;
+  color-scheme: dark;
+}
 
 /* iPad niceties */
 * { -webkit-tap-highlight-color: transparent; }
