@@ -1,5 +1,5 @@
 .gantt-container {
-  --row-height: 64px;
+  --row-height: 64px; /* a bit taller to give breathing room */
   --grid: #333;
   --segment: #ff6600;
   --segment-turn: #555;
@@ -12,7 +12,6 @@
   overflow: hidden;
   background: #1a1a1a;
   box-shadow: 0 6px 18px rgba(0,0,0,0.5);
-  color: #f0f0f0;
 }
 
 .timeline-header {
@@ -21,110 +20,52 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  background: #121212;
+  background: linear-gradient(180deg, #121212, #1a1a1a);
   border-bottom: 1px solid #333;
 }
 
-.aircraft-label-placeholder {
-  height: 42px;
-  border-right: 1px solid #333;
-}
+.aircraft-label-placeholder { height: 42px; border-right: 1px solid #333; }
 
 .timeline-hour {
-  height: 42px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: .85rem;
-  color: #bbb;
-  position: relative;
+  height: 42px; display: flex; align-items: center; justify-content: center;
+  font-size: .85rem; color: #bbb; position: relative;
 }
-.timeline-hour::after {
-  content:"";
-  position:absolute;
-  right:0;
-  top:42px;
-  bottom:0;
-  width:1px;
-  background: var(--grid);
-}
+.timeline-hour::after { content:""; position:absolute; right:0; top:42px; bottom:0; width:1px; background: var(--grid); }
 
 .aircraft-row {
-  display: grid;
-  grid-template-columns: 180px 1fr;
-  min-height: var(--row-height);
+  display: grid; grid-template-columns: 180px 1fr; min-height: var(--row-height);
 }
 .aircraft-label {
-  display:flex;
-  align-items:center;
-  gap:8px;
-  padding:0 12px;
-  border-right:1px solid #333;
-  font-weight:600;
-  white-space:nowrap;
-  color:#fff;
+  display:flex; align-items:center; gap:8px; padding:0 12px; border-right:1px solid #333; font-weight:600; white-space:nowrap;
+  color: #f0f0f0;
 }
 
-/* small orange button */
+/* (legacy) small orange button – safe to keep */
 .crew-swap-btn {
-  margin-left: 6px;
-  font-size:.75rem;
-  border:0;
-  border-radius:999px;
-  padding:4px 8px;
-  background:#ff6600;
-  color:#fff;
-  cursor:pointer;
+  margin-left: 6px; font-size:.75rem; border:0; border-radius:999px; padding:4px 8px;
+  background:#ff6600; color:#fff; cursor:pointer;
 }
-.crew-swap-btn:hover { background:#e65c00; }
+.crew-swap-btn:hover{ background:#e65c00; }
 
-/* next-crew selector */
-.crew-choice {
-  display:flex;
-  align-items:center;
-  gap:6px;
-  margin-left: 8px;
-  font-size:.8rem;
+/* New: explicit next-crew selector */
+.crew-choice{
+  display:flex; align-items:center; gap:6px; margin-left: 8px; font-size:.8rem;
 }
-.crew-choice button {
-  border:0;
-  border-radius:999px;
-  padding:4px 8px;
-  background:#2b2b2b;
-  color:#ff6600;
-  cursor:pointer;
+.crew-choice button{
+  border:0; border-radius:999px; padding:4px 8px; background:#2b2b2b; color:#ff6600; cursor:pointer;
 }
-.crew-choice button:hover { background:#3a3a3a; }
+.crew-choice button:hover{ background:#3a3a3a; }
 
-.timeline {
-  position:relative;
-  min-height:var(--row-height);
-  border-bottom:1px solid #333;
-  background:#1a1a1a;
-}
-.timeline.over {
-  outline:2px dashed rgba(255,102,0,.5);
-  outline-offset:-2px;
-}
+.timeline { position:relative; min-height:var(--row-height); border-bottom:1px solid #333; background:#1a1a1a; }
+.timeline.over { outline:2px dashed rgba(255,102,0,.5); outline-offset:-2px; }
 
 /* segments */
 .segment {
-  position:absolute;
-  height:40px;
-  top:8px;
-  border-radius:10px;
-  display:flex;
-  align-items:center;
-  padding:0 10px 0 12px;
-  padding-right:80px;
-  gap:10px;
+  position:absolute; height:40px; top:8px; border-radius:10px; display:flex; align-items:center;
+  padding:0 10px 0 12px; padding-right:80px; gap:10px;
   box-shadow:0 4px 10px rgba(0,0,0,0.4);
-  user-select:none;
-  -webkit-user-select:none;
-  touch-action:none;
-  transform:translateZ(0);
-  will-change:left, width;
-  z-index:1;
+  user-select:none; -webkit-user-select:none; touch-action:none;
+  transform:translateZ(0); will-change:left, width; z-index:1; /* base z for flights */
 }
 
 .segment.outbound { background: var(--segment); color:#fff; z-index:2; }
@@ -132,94 +73,69 @@
 .segment.late { background: var(--warning); color:#222; z-index:2; }
 .segment.curfew { background: var(--danger); color:#fff; z-index:2; }
 
-.turn-band {
+/* thin turnaround band positioned below flights */
+.turn-band{
   position:absolute;
   left:0; right:0;
-  top:46px;
+  top:46px;           /* sits under the 40px flight bars (8px top + 40px + a little gap) */
   height:8px;
   background: var(--segment-turn);
   border-radius:6px;
   opacity:.85;
 }
 
-/* crew-change chip */
-.segment.crew-change {
+/* crew-change chip on dashed mini segment */
+.segment.crew-change{
   background: transparent;
   border: 2px dashed #ff6600;
   height: 24px;
   top: 16px;
   z-index: 4;
   padding-right: 12px;
-  overflow: visible;
+  overflow: visible; /* let chip overflow tiny marker */
 }
-.crew-change-chip {
+.crew-change-chip{
   position: absolute;
   left: 50%;
-  transform: translate(-50%, -120%);
-  white-space: nowrap;
+  transform: translate(-50%, -120%);  /* center above marker */
+  white-space: nowrap;                 /* prevent wrapping */
   background: #1a1a1a;
   color: #ff6600;
   border: 1px solid #ff6600;
   padding: 2px 8px;
   border-radius: 999px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.08);
-  pointer-events: none;
+  pointer-events: none;                /* never blocks drag */
 }
 
-.seg-label {
-  display:block;
-  flex:1;
-  min-width:0;
-  overflow:hidden;
-  white-space:nowrap;
-  text-overflow:ellipsis;
-  font-size: clamp(.68rem, 1.2vw, .88rem);
-  font-weight:600;
-  color: #fff;
+/* text, controls */
+.seg-label{
+  display:block; flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+  font-size: clamp(.68rem, 1.2vw, .88rem); font-weight:600;
+  color: #f0f0f0;
 }
 
-.start-select.start-pill {
-  position:absolute;
-  right:42px;
-  top:50%;
-  transform:translateY(-50%);
-  height:24px;
-  line-height:24px;
-  padding:0 6px;
-  font-size:.78rem;
-  border-radius:999px;
-  background:#1a1a1a;
-  border:1px solid #333;
+.start-select.start-pill{
+  position:absolute; right:42px; top:50%; transform:translateY(-50%);
+  height:24px; line-height:24px; padding:0 6px; font-size:.78rem;
+  border-radius:999px; background:#1a1a1a; border:1px solid #333;
   box-shadow:0 1px 2px rgba(0,0,0,0.12);
 }
 
-.delete-btn {
-  position:absolute;
-  right:6px;
-  top:50%;
-  transform:translateY(-50%);
-  border:0;
-  border-radius:8px;
-  background:rgba(0,0,0,0.65);
-  color:#fff;
-  padding:2px 8px;
-  cursor:pointer;
-  z-index:3;
+.delete-btn{
+  position:absolute; right:6px; top:50%; transform:translateY(-50%);
+  border:0; border-radius:8px; background:rgba(0,0,0,0.65); color:#fff; padding:2px 8px; cursor:pointer; z-index:3;
 }
-.delete-btn:hover { background:rgba(0,0,0,0.8); }
+.delete-btn:hover{ background:rgba(0,0,0,0.8); }
 
-.crew-badge {
-  position:absolute;
-  left:8px;
-  top:4px;
-  padding:2px 6px;
-  font-size:.7rem;
-  border-radius:999px;
-  background: rgba(255,255,255,0.25);
-  color:#fff;
-  backdrop-filter: blur(2px);
+/* outbound-only badge (kept small, left side so it never collides with controls) */
+.crew-badge{
+  position:absolute; left:8px; top:4px;
+  padding:2px 6px; font-size:.7rem; border-radius:999px;
+  background: rgba(255,255,255,0.25); color:#fff; backdrop-filter: blur(2px);
 }
 
+/* compact on narrow screens */
 @media (max-width: 1100px){
   .segment{ height:36px; top:6px; padding-right:72px; }
   .turn-band{ top:44px; }
@@ -228,38 +144,36 @@
   .start-select.start-pill{ height:22px; font-size:.74rem; }
 }
 
-.segment.preview {
+/* ---- Ghost preview styles ---- */
+.segment.preview{
   pointer-events: none;
-  opacity: .28;
+  opacity: .28;                 /* light “shadow” look */
   box-shadow: none;
   border: 2px dashed rgba(255,102,0,.55);
   background: rgba(255,102,0,.25);
-  z-index: 5;
+  z-index: 5;                   /* above grid */
 }
-.segment.turnaround.preview { border: 0; background: transparent; }
-.turn-band.preview { opacity: .5; }
-.segment.preview.invalid {
+.segment.turnaround.preview{
+  border: 0;
+  background: transparent;
+}
+.turn-band.preview{
+  opacity: .5;
+}
+.segment.preview.invalid{
   border-color: #8b2b2b;
   background: rgba(139,43,43,.2);
 }
-
-.crew-toggle {
-  display:flex;
-  align-items:center;
-  gap:6px;
-  margin-left:8px;
+/* toggle pills */
+.crew-toggle{
+  display:flex; align-items:center; gap:6px; margin-left:8px;
 }
-.crew-toggle button {
-  border:0;
-  border-radius:999px;
-  padding:4px 10px;
-  background:#2b2b2b;
-  color:#ff6600;
-  cursor:pointer;
-  font-weight:600;
-  font-size:.8rem;
+.crew-toggle button{
+  border:0; border-radius:999px; padding:4px 10px;
+  background:#2b2b2b; color:#ff6600; cursor:pointer; font-weight:600; font-size:.8rem;
 }
-.crew-toggle button.active { background:#ff6600; color:#fff; }
-.crew-toggle button:hover { filter: brightness(0.97); }
+.crew-toggle button.active{ background:#ff6600; color:#fff; }
+.crew-toggle button:hover{ filter: brightness(0.97); }
 
+/* make Safari/iPad keep the drag */
 .timeline { touch-action: none; }
